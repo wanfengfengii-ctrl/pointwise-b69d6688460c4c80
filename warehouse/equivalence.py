@@ -17,18 +17,33 @@ def bindings_equal(
     root_key: str,
     root_instance: int,
 ) -> bool:
-    record = graph.records[root_key]
-    instance = read_instance(connection, root_instance)
-    if _label(record) != _label(instance):
-        return False
-    incoming = graph.edges[root_key]
-    stored = read_references(connection, root_instance)
-    if incoming.keys() != stored.keys():
-        return False
-    return all(
-        _label(graph.records[target]) == _label(read_instance(connection, stored[name]))
-        for name, target in incoming.items()
-    )
+    # Two roots share an instance only when their whole reachable graphs agree on
+    # logical keys, revisions, payloads, and named edges. Walk both graphs in
+    # lockstep from the roots; the pairing is deterministic because edge names
+    # are unique per record. The visited mapping terminates cycles and rejects
+    # convergent shapes that would pair one package key with two instances.
+    paired = {root_key: root_instance}
+    pending = [root_key]
+    while pending:
+        key = pending.pop()
+        instance_id = paired[key]
+        record = graph.records[key]
+        instance = read_instance(connection, instance_id)
+        if _label(record) != _label(instance):
+            return False
+        incoming = graph.edges[key]
+        stored = read_references(connection, instance_id)
+        if incoming.keys() != stored.keys():
+            return False
+        for name, target in incoming.items():
+            target_instance = stored[name]
+            known = paired.get(target)
+            if known is None:
+                paired[target] = target_instance
+                pending.append(target)
+            elif known != target_instance:
+                return False
+    return True
 
 
 def find_reusable_instances(connection: sqlite3.Connection, graph: ValidatedPackage) -> dict[str, int]:

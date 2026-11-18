@@ -70,6 +70,16 @@ class TransferTests(unittest.TestCase):
             with self.assertRaises(KeyError):
                 pack(source, 'unknown')
 
+    def test_n3_pack_uses_own_selection_regardless_of_pack_order(self):
+        sample, _ = load_sample()
+        with closing(open_source(self.root / 'source.sqlite')) as source:
+            seed_source(source, sample)
+            second = pack(source, 'R2')
+            first = pack(source, 'R1')
+        self.assertEqual([(r.key, r.revision, r.payload) for r in first.records if r.key == 'C'], [('C', '1', 10)])
+        self.assertEqual([(r.key, r.revision, r.payload) for r in second.records if r.key == 'C'], [('C', '2', 20)])
+        self.assertNotEqual(first, second)
+
     def test_n3_empty_closure_valid_mount_and_inventory(self):
         with closing(open_source(self.root / 'source.sqlite')) as source:
             put(source, 'D', '1', 4)
@@ -143,6 +153,42 @@ class TransferTests(unittest.TestCase):
         self.assertEqual(follow(self.warehouse, 'old', 0, ['aux', 'cal']).payload, 10)
         self.assertEqual(follow(self.warehouse, 'new', 0, ['aux', 'cal']).payload, 20)
         self.assertEqual(self.warehouse.execute('SELECT COUNT(*) FROM instances').fetchone(), (7,))
+
+    def test_n4_deep_structural_difference_prevents_sharing(self):
+        cyclic = ReleasePackage('cyclic-root', ('A',), (
+            PackageRecord('A', '1', 0, (('next', 'B'),)),
+            PackageRecord('B', '1', 0, (('loop', 'A'),)),
+        ))
+        broken = ReleasePackage('broken-root', ('A',), (
+            PackageRecord('A', '1', 0, (('next', 'B'),)),
+            PackageRecord('B', '1', 0),
+        ))
+        first = dict(mount(self.warehouse, cyclic))
+        second = dict(mount(self.warehouse, broken))
+        first_rows = {row.key: row.instance_id for row in inventory(self.warehouse, 'cyclic-root').rows}
+        second_rows = {row.key: row.instance_id for row in inventory(self.warehouse, 'broken-root').rows}
+        self.assertNotEqual(second['A'], first['A'])
+        self.assertNotEqual(second_rows['B'], first_rows['B'])
+        self.assertEqual(follow(self.warehouse, 'cyclic-root', 0, ['next', 'loop']).instance_id, first['A'])
+        with self.assertRaises(KeyError):
+            follow(self.warehouse, 'broken-root', 0, ['next', 'loop'])
+
+    def test_n4_deep_payload_difference_beyond_direct_targets(self):
+        def chain(release_id, payload):
+            return ReleasePackage(release_id, ('A',), (
+                PackageRecord('A', '1', 0, (('to-b', 'B'),)),
+                PackageRecord('B', '1', 0, (('to-c', 'C'),)),
+                PackageRecord('C', '1', 0, (('to-d', 'D'),)),
+                PackageRecord('D', '1', payload),
+            ))
+        mount(self.warehouse, chain('chain-old', 10))
+        mount(self.warehouse, chain('chain-new', 20))
+        first = {row.key: row.instance_id for row in inventory(self.warehouse, 'chain-old').rows}
+        second = {row.key: row.instance_id for row in inventory(self.warehouse, 'chain-new').rows}
+        for key in ('A', 'B', 'C', 'D'):
+            self.assertNotEqual(second[key], first[key])
+        self.assertEqual(follow(self.warehouse, 'chain-new', 0, ['to-b', 'to-c', 'to-d']).payload, 20)
+        self.assertEqual(follow(self.warehouse, 'chain-old', 0, ['to-b', 'to-c', 'to-d']).payload, 10)
 
     def test_n4_binding_labels_include_revision_payload_name_and_target(self):
         first = ReleasePackage('base', ('A', 'C', 'D'), (
