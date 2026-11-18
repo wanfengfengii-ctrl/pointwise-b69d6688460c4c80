@@ -1,0 +1,14 @@
+{
+  "records": [
+    {"key": "A", "revision": "cycle-1", "payload": 0, "references": [["辅助", "B"]]},
+    {"key": "B", "revision": "1", "payload": -2, "references": [["回入口", "A"], ["校准", "C"]]},
+    {"key": "C", "revision": "1", "payload": 10, "references": []},
+    {"key": "C", "revision": "2", "payload": 20, "references": []},
+    {"key": "D", "revision": "1", "payload": 4, "references": []}
+  ],
+  "releases": [
+    {"release_id": "R1", "selection": {"A": "cycle-1", "B": "1", "C": "1", "D": "1"}, "entries": ["A", "D"]},
+    {"release_id": "R2", "selection": {"A": "cycle-1", "B": "1", "C": "2", "D": "1"}, "entries": ["A", "D"]}
+  ],
+  "calibration_path": ["辅助", "校准"]
+}
